@@ -106,8 +106,8 @@ install_php() {
     
     sudo apt install -y php8.4 php8.4-fpm php8.4-cli php8.4-common php8.4-curl \
         php8.4-zip php8.4-gd php8.4-mysql php8.4-xml php8.4-mbstring \
-        php8.4-json php8.4-intl php8.4-bcmath php8.4-bz2 php8.4-readline \
-        php8.4-pgsql php8.4-redis
+        php8.4-intl php8.4-bcmath php8.4-bz2 php8.4-readline \
+        php8.4-pgsql php8.4-redis php8.4-opcache
     
     # Configure PHP
     sudo sed -i 's/;cgi.fix_pathinfo=1/cgi.fix_pathinfo=0/' /etc/php/8.4/fpm/php.ini
@@ -199,8 +199,9 @@ setup_app_directory() {
     # Copy application files
     if [[ -d "$(pwd)" && -f "$(pwd)/composer.json" ]]; then
         log "Copying application files..."
-        cp -r $(pwd)/* /var/www/${APP_NAME}/
-        cp -r $(pwd)/.* /var/www/${APP_NAME}/ 2>/dev/null || true
+        cp -r . /var/www/${APP_NAME}/
+        # Remove .git directory if exists
+        rm -rf /var/www/${APP_NAME}/.git
     else
         error "Application files not found in current directory"
         exit 1
@@ -224,7 +225,7 @@ configure_environment() {
     log "Configuring environment..."
     
     # Generate app key
-    APP_KEY=$(php artisan key:generate --show)
+    APP_KEY=$(php artisan key:generate --show 2>/dev/null || echo "base64:$(openssl rand -base64 32)")
     
     # Create .env file
     cat > .env << EOF
