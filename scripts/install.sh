@@ -43,10 +43,59 @@ command_exists() {
 print_status "Updating system packages..."
 apt update && apt upgrade -y
 
-# Install required packages
-print_status "Installing required packages..."
+# Add PHP repository
+print_status "Adding PHP repository..."
+if ! apt-cache policy | grep -q ondrej/php; then
+    apt install -y software-properties-common
+    add-apt-repository ppa:ondrej/php -y
+    apt update
+fi
+
+# Function to install PHP packages
+install_php_packages() {
+    local php_version=$1
+    print_status "Installing PHP $php_version packages..."
+
+    # Try to install PHP packages
+    if apt install -y \
+        php${php_version} \
+        php${php_version}-cli \
+        php${php_version}-fpm \
+        php${php_version}-pgsql \
+        php${php_version}-redis \
+        php${php_version}-gd \
+        php${php_version}-bcmath \
+        php${php_version}-xml \
+        php${php_version}-curl \
+        php${php_version}-dom \
+        php${php_version}-zip \
+        php${php_version}-fileinfo \
+        php${php_version}-mbstring \
+        php${php_version}-intl; then
+        print_status "PHP $php_version installed successfully"
+        return 0
+    else
+        print_warning "PHP $php_version installation failed"
+        return 1
+    fi
+}
+
+# Try to install PHP 8.4, fallback to 8.3, then 8.2
+PHP_VERSION=""
+if install_php_packages "8.4"; then
+    PHP_VERSION="8.4"
+elif install_php_packages "8.3"; then
+    PHP_VERSION="8.3"
+elif install_php_packages "8.2"; then
+    PHP_VERSION="8.2"
+else
+    print_error "Failed to install any supported PHP version (8.4, 8.3, 8.2)"
+    exit 1
+fi
+
+# Install remaining packages
+print_status "Installing remaining packages..."
 apt install -y \
-    software-properties-common \
     curl \
     wget \
     git \
@@ -55,20 +104,6 @@ apt install -y \
     postgresql \
     postgresql-contrib \
     redis-server \
-    php8.4 \
-    php8.4-cli \
-    php8.4-fpm \
-    php8.4-pgsql \
-    php8.4-redis \
-    php8.4-gd \
-    php8.4-bcmath \
-    php8.4-xml \
-    php8.4-curl \
-    php8.4-dom \
-    php8.4-zip \
-    php8.4-fileinfo \
-    php8.4-mbstring \
-    php8.4-intl \
     composer \
     nodejs \
     npm \
