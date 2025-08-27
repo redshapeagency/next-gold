@@ -1,0 +1,31 @@
+[Unit]
+Description=Next Gold Queue Worker
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/next-gold
+ExecStart=/usr/bin/php /var/www/next-gold/artisan queue:work redis --sleep=3 --tries=3 --max-time=3600 --memory=512
+Restart=always
+RestartSec=10
+
+# Prevent memory leaks
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# Security
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/var/www/next-gold/storage
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=next-gold-worker
+
+[Install]
+WantedBy=multi-user.target

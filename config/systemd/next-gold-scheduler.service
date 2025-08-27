@@ -1,0 +1,13 @@
+[Unit]
+Description=Next Gold Scheduler
+After=network.target
+
+[Service]
+Type=oneshot
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/next-gold
+ExecStart=/usr/bin/php /var/www/next-gold/artisan schedule:run
+
+[Install]
+WantedBy=multi-user.target

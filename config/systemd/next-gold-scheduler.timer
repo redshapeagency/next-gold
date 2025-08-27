@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Next Gold Scheduler every minute
+Requires=next-gold-scheduler.service
+
+[Timer]
+OnCalendar=*:*
+Persistent=true
+
+[Install]
+WantedBy=timers.target
