@@ -3,6 +3,62 @@
 # Next Gold Installation Script
 # Idempotent installation for Ubuntu 24.04
 
+# Show help if requested
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    echo "Next Gold Installation Script"
+    echo ""
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --help, -h          Show this help message"
+    echo "  --skip-deps         Skip dependency installation (useful if installation was interrupted)"
+    echo "  --domain DOMAIN     Set the domain name (default: hostname)"
+    echo "  --db-name NAME      Set the database name (default: next_gold)"
+    echo "  --db-user USER      Set the database user (default: next_gold)"
+    echo ""
+    echo "Environment variables:"
+    echo "  SKIP_DEPS=true      Skip PHP/Node.js dependency installation"
+    echo "  DOMAIN=example.com  Set the domain name"
+    echo "  DB_NAME=name        Set the database name"
+    echo "  DB_USER=user        Set the database user"
+    echo "  DB_PASS=password    Set the database password (auto-generated if not set)"
+    echo "  REDIS_PASS=password Set the Redis password (auto-generated if not set)"
+    echo ""
+    echo "Examples:"
+    echo "  $0                           # Normal installation"
+    echo "  $0 --skip-deps               # Skip dependency installation"
+    echo "  SKIP_DEPS=true $0            # Skip dependencies using environment variable"
+    echo "  DOMAIN=example.com $0        # Set custom domain"
+    exit 0
+fi
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --skip-deps)
+            SKIP_DEPS=true
+            shift
+            ;;
+        --domain)
+            DOMAIN="$2"
+            shift 2
+            ;;
+        --db-name)
+            DB_NAME="$2"
+            shift 2
+            ;;
+        --db-user)
+            DB_USER="$2"
+            shift 2
+            ;;
+        *)
+            print_error "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
 set -e
 
 # Colors for output
@@ -20,6 +76,7 @@ DB_USER="${DB_USER:-next_gold}"
 DB_PASS="${DB_PASS:-$(openssl rand -base64 12)}"
 REDIS_PASS="${REDIS_PASS:-$(openssl rand -base64 12)}"
 APP_KEY="${APP_KEY:-$(openssl rand -base64 32)}"
+SKIP_DEPS="${SKIP_DEPS:-false}"  # Set to true to skip dependency installation
 
 # Function to print colored output
 print_status() {
@@ -34,10 +91,68 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Function to check network connectivity
+check_network() {
+    print_status "Checking network connectivity..."
+    if curl -s --max-time 10 https://packagist.org > /dev/null 2>&1; then
+        print_status "Network connectivity to Packagist: OK"
+    else
+        print_warning "Cannot reach Packagist (Composer repository)"
+        print_warning "This might cause dependency installation to fail"
+    fi
+
+    if curl -s --max-time 10 https://registry.npmjs.org > /dev/null 2>&1; then
+        print_status "Network connectivity to npm registry: OK"
+    else
+        print_warning "Cannot reach npm registry"
+        print_warning "This might cause Node.js dependency installation to fail"
+    fi
+}
+
+# Function to check system requirements
+check_requirements() {
+    print_status "Checking system requirements..."
+
+    # Check available memory
+    local total_mem=$(free -m | awk 'NR==2{printf "%.0f", $2}')
+    if [ "$total_mem" -lt 1024 ]; then
+        print_warning "System has ${total_mem}MB RAM. At least 1GB is recommended for dependency installation."
+    else
+        print_status "System memory: ${total_mem}MB - OK"
+    fi
+
+    # Check available disk space
+    local available_space=$(df / | awk 'NR==2{printf "%.0f", $4/1024}')
+    if [ "$available_space" -lt 1024 ]; then
+        print_warning "Only ${available_space}MB free space available. At least 1GB is recommended."
+    else
+        print_status "Available disk space: ${available_space}MB - OK"
+    fi
+}
+
 # Function to check if command exists
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
+
+# Function to handle script interruption
+cleanup_on_interrupt() {
+    print_warning "Installation interrupted by user"
+    print_warning "You can continue the installation later by running:"
+    echo "  cd $APP_DIR"
+    echo "  composer install --no-dev --optimize-autoloader"
+    echo "  npm install && npm run build"
+    echo "  Then run the install script again with SKIP_DEPS=true:"
+    echo "  SKIP_DEPS=true bash /path/to/install.sh"
+    exit 1
+}
+
+# Set up interrupt handler
+trap cleanup_on_interrupt INT TERM
+
+# Pre-installation checks
+check_requirements
+check_network
 
 # Update system
 print_status "Updating system packages..."
@@ -190,37 +305,99 @@ fi
 # Install PHP dependencies
 print_status "Installing PHP dependencies..."
 cd "$APP_DIR"
-if [ -f "composer.json" ]; then
-    if composer install --no-dev --optimize-autoloader 2>/dev/null; then
-        print_status "PHP dependencies installed successfully"
-    else
-        print_error "Failed to install PHP dependencies"
+
+if [ "$SKIP_DEPS" = "true" ]; then
+    print_warning "Skipping PHP dependency installation (SKIP_DEPS=true)"
+    print_warning "Remember to run 'composer install --no-dev --optimize-autoloader' manually"
+else
+    # Check if Composer is available
+    if ! command_exists composer; then
+        print_error "Composer is not installed or not in PATH"
+        print_warning "You can install Composer manually or set SKIP_DEPS=true to skip this step"
         exit 1
     fi
-else
-    print_error "composer.json not found"
-    exit 1
+
+    if [ -f "composer.json" ]; then
+        print_status "Installing Composer dependencies (this may take a few minutes)..."
+        echo "  Tip: If this takes too long, you can cancel with Ctrl+C and run:"
+        echo "  cd $APP_DIR && composer install --no-dev --optimize-autoloader"
+
+        # Set Composer to non-interactive mode and increase timeout
+        export COMPOSER_NO_INTERACTION=1
+        export COMPOSER_PROCESS_TIMEOUT=300
+
+        # Try to install dependencies with verbose output for debugging
+        if timeout 900 composer install --no-dev --optimize-autoloader --no-progress --prefer-dist 2>&1; then
+            print_status "PHP dependencies installed successfully"
+        else
+            print_error "Failed to install PHP dependencies after 15 minutes"
+            print_warning "This might be due to:"
+            echo "  - Network connectivity issues"
+            echo "  - Memory limitations"
+            echo "  - Dependency conflicts"
+            echo ""
+            print_warning "You can try to install dependencies manually:"
+            echo "  cd $APP_DIR"
+            echo "  composer install --no-dev --optimize-autoloader"
+            echo ""
+            print_warning "Or run the script again with SKIP_DEPS=true:"
+            echo "  SKIP_DEPS=true bash install.sh"
+            exit 1
+        fi
+    else
+        print_error "composer.json not found"
+        exit 1
+    fi
 fi
 
 # Install Node.js dependencies
 print_status "Installing Node.js dependencies..."
-if [ -f "package.json" ]; then
-    if npm install 2>/dev/null; then
-        print_status "Node.js dependencies installed successfully"
-    else
-        print_error "Failed to install Node.js dependencies"
-        exit 1
-    fi
-
-    if npm run build 2>/dev/null; then
-        print_status "Assets built successfully"
-    else
-        print_error "Failed to build assets"
-        exit 1
-    fi
+if [ "$SKIP_DEPS" = "true" ]; then
+    print_warning "Skipping Node.js dependency installation (SKIP_DEPS=true)"
+    print_warning "Remember to run 'npm install && npm run build' manually"
 else
-    print_error "package.json not found"
-    exit 1
+    if [ -f "package.json" ]; then
+        print_status "Installing npm dependencies (this may take a few minutes)..."
+        echo "  Tip: If this takes too long, you can cancel with Ctrl+C and run:"
+        echo "  cd $APP_DIR && npm install && npm run build"
+
+        # Try to install dependencies with timeout
+        if timeout 300 npm install --silent 2>&1; then
+            print_status "Node.js dependencies installed successfully"
+
+            # Build assets
+            print_status "Building assets..."
+            if timeout 300 npm run build 2>&1; then
+                print_status "Assets built successfully"
+            else
+                print_error "Failed to build assets after 5 minutes"
+                print_warning "You can try to build assets manually:"
+                echo "  cd $APP_DIR"
+                echo "  npm run build"
+                echo ""
+                print_warning "Or run the script again with SKIP_DEPS=true:"
+                echo "  SKIP_DEPS=true bash install.sh"
+                exit 1
+            fi
+        else
+            print_error "Failed to install Node.js dependencies after 5 minutes"
+            print_warning "This might be due to:"
+            echo "  - Network connectivity issues"
+            echo "  - npm registry problems"
+            echo "  - Memory limitations"
+            echo ""
+            print_warning "You can try to install dependencies manually:"
+            echo "  cd $APP_DIR"
+            echo "  npm install && npm run build"
+            echo ""
+            print_warning "Or run the script again with SKIP_DEPS=true:"
+            echo "  SKIP_DEPS=true bash install.sh"
+            exit 1
+        fi
+    else
+        print_error "package.json not found"
+        exit 1
+    fi
 fi
 
 # Configure environment
@@ -440,3 +617,14 @@ echo "  Monitor system: $APP_DIR/scripts/monitor.sh"
 echo
 print_warning "Please save these credentials securely!"
 print_warning "Remember to change the default admin password!"
+
+if [ "$SKIP_DEPS" = "true" ]; then
+    echo
+    print_warning "⚠️  Dependency installation was skipped!"
+    echo "Complete the installation by running:"
+    echo "  cd $APP_DIR"
+    echo "  composer install --no-dev --optimize-autoloader"
+    echo "  npm install && npm run build"
+    echo "  Then run the remaining setup:"
+    echo "  SKIP_DEPS=true bash install.sh"
+fi
