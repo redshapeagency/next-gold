@@ -170,7 +170,13 @@ install_redis() {
     
     # Configure Redis
     echo "[$TIMESTAMP] Configuring Redis..."
-    sudo sed -i 's/# requirepass foobared/requirepass '"$(printf '%s\n' "$REDIS_PASSWORD" | sed 's/[[\.*^$()+?{|]/\\&/g')"'/' /etc/redis/redis.conf
+    # Use a temporary file to safely handle special characters in password
+    echo "requirepass $REDIS_PASSWORD" | sudo tee -a /etc/redis/redis.conf.tmp > /dev/null
+    sudo sed '/# requirepass foobared/r /etc/redis/redis.conf.tmp' /etc/redis/redis.conf | sudo tee /etc/redis/redis.conf.new > /dev/null
+    sudo sed -i '/# requirepass foobared/d' /etc/redis/redis.conf.new
+    sudo mv /etc/redis/redis.conf.new /etc/redis/redis.conf
+    sudo rm -f /etc/redis/redis.conf.tmp
+    
     sudo sed -i 's/bind 127.0.0.1 ::1/bind 127.0.0.1/' /etc/redis/redis.conf
     sudo sed -i 's/# maxmemory <bytes>/maxmemory 256mb/' /etc/redis/redis.conf
     sudo sed -i 's/# maxmemory-policy noeviction/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
