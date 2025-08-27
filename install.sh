@@ -169,12 +169,9 @@ install_redis() {
     sudo apt install -y redis
     
     # Configure Redis
-echo "[$TIMESTAMP] Configuring Redis..."
-sudo sed -i 's/# requirepass foobared/requirepass '"$(printf '%s
-' "$REDIS_PASSWORD" | sed 's/[[\.*^$()+?{|]/\&/g')"'/' /etc/redis/redis.conf
-sudo sed -i 's/bind 127.0.0.1 ::1/bind 127.0.0.1/' /etc/redis/redis.conf
-sudo systemctl restart redis-server
-sudo systemctl enable redis-server${REDIS_PASSWORD}'/' /etc/redis/redis.conf
+    echo "[$TIMESTAMP] Configuring Redis..."
+    sudo sed -i 's/# requirepass foobared/requirepass '"$(printf '%s\n' "$REDIS_PASSWORD" | sed 's/[[\.*^$()+?{|]/\\&/g')"'/' /etc/redis/redis.conf
+    sudo sed -i 's/bind 127.0.0.1 ::1/bind 127.0.0.1/' /etc/redis/redis.conf
     sudo sed -i 's/# maxmemory <bytes>/maxmemory 256mb/' /etc/redis/redis.conf
     sudo sed -i 's/# maxmemory-policy noeviction/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
     
