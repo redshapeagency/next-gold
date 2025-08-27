@@ -1,0 +1,7 @@
+# robots.txt
+User-agent: *
+Disallow: /admin
+Disallow: /storage
+Disallow: /vendor
+Disallow: /bootstrap
+Allow: /

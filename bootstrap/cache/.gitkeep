@@ -1,0 +1,3 @@
+# Bootstrap Cache
+
+This directory contains cached configuration, routes and service files for faster application startup.

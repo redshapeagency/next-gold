@@ -210,6 +210,38 @@ setup_app_directory() {
         cp -r . /var/www/${APP_NAME}/
         # Remove .git directory if exists
         rm -rf /var/www/${APP_NAME}/.git
+        
+        # Ensure artisan is executable
+        chmod +x /var/www/${APP_NAME}/artisan
+        
+        # Verify essential files exist
+        if [[ ! -f "/var/www/${APP_NAME}/artisan" ]]; then
+            error "Critical file missing: artisan"
+            exit 1
+        fi
+        
+        if [[ ! -f "/var/www/${APP_NAME}/public/index.php" ]]; then
+            error "Critical file missing: public/index.php"
+            exit 1
+        fi
+        
+        if [[ ! -f "/var/www/${APP_NAME}/.env.example" ]]; then
+            error "Critical file missing: .env.example"
+            exit 1
+        fi
+        
+        if [[ ! -d "/var/www/${APP_NAME}/storage" ]]; then
+            error "Critical directory missing: storage"
+            exit 1
+        fi
+        
+        if [[ ! -d "/var/www/${APP_NAME}/bootstrap" ]]; then
+            error "Critical directory missing: bootstrap"
+            exit 1
+        fi
+        
+        log "All essential Laravel files verified successfully"
+        
     else
         error "Application files not found in current directory"
         exit 1
@@ -232,80 +264,76 @@ install_dependencies() {
 configure_environment() {
     log "Configuring environment..."
     
+    # Copy .env.example to .env
+    if [[ -f ".env.example" ]]; then
+        cp .env.example .env
+        log "Copied .env.example to .env"
+    else
+        error ".env.example file not found"
+        exit 1
+    fi
+    
     # Generate app key
     APP_KEY=$(php artisan key:generate --show 2>/dev/null || echo "base64:$(openssl rand -base64 32)")
     
-    # Create .env file
-    cat > .env << EOF
-APP_NAME="Next Gold"
-APP_ENV=${APP_ENV}
-APP_KEY=${APP_KEY}
-APP_DEBUG=false
-APP_TIMEZONE=Europe/Rome
-APP_URL=https://${APP_DOMAIN}
-
-LOG_CHANNEL=stack
-LOG_DEPRECATIONS_CHANNEL=null
-LOG_LEVEL=error
-
-DB_CONNECTION=pgsql
-DB_HOST=127.0.0.1
-DB_PORT=5432
-DB_DATABASE=${DB_NAME}
-DB_USERNAME=${DB_USER}
-DB_PASSWORD=${DB_PASSWORD}
-
-BROADCAST_CONNECTION=log
-CACHE_STORE=redis
-FILESYSTEM_DISK=local
-QUEUE_CONNECTION=redis
-SESSION_DRIVER=redis
-SESSION_LIFETIME=120
-
-MEMCACHED_HOST=127.0.0.1
-
-REDIS_HOST=127.0.0.1
-REDIS_PASSWORD=${REDIS_PASSWORD}
-REDIS_PORT=6379
-
-MAIL_MAILER=log
-MAIL_HOST=mailpit
-MAIL_PORT=1025
-MAIL_USERNAME=null
-MAIL_PASSWORD=null
-MAIL_ENCRYPTION=null
-MAIL_FROM_ADDRESS="hello@example.com"
-MAIL_FROM_NAME="\${APP_NAME}"
-
-AWS_ACCESS_KEY_ID=
-AWS_SECRET_ACCESS_KEY=
-AWS_DEFAULT_REGION=us-east-1
-AWS_BUCKET=
-AWS_USE_PATH_STYLE_ENDPOINT=false
-
-VITE_APP_NAME="\${APP_NAME}"
-
-# Next Gold specific settings
-GOLD_PRICE_DRIVER=metals_api
-METALS_API_KEY=
-BACKUP_ENABLED=${BACKUP_ENABLED}
-BACKUP_FREQUENCY=daily
-BACKUP_RETENTION_DAYS=30
-EOF
+    # Update .env file with production values
+    sed -i "s/APP_NAME=.*/APP_NAME=\"Next Gold\"/" .env
+    sed -i "s/APP_ENV=.*/APP_ENV=${APP_ENV}/" .env
+    sed -i "s/APP_KEY=.*/APP_KEY=${APP_KEY}/" .env
+    sed -i "s/APP_DEBUG=.*/APP_DEBUG=false/" .env
+    sed -i "s|APP_URL=.*|APP_URL=https://${APP_DOMAIN}|" .env
+    sed -i "s/DB_DATABASE=.*/DB_DATABASE=${DB_NAME}/" .env
+    sed -i "s/DB_USERNAME=.*/DB_USERNAME=${DB_USER}/" .env
+    sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=${DB_PASSWORD}/" .env
+    sed -i "s/REDIS_PASSWORD=.*/REDIS_PASSWORD=${REDIS_PASSWORD}/" .env
+    sed -i "s/LOG_LEVEL=.*/LOG_LEVEL=error/" .env
 
     # Set permissions
     sudo chown -R www-data:www-data /var/www/${APP_NAME}
     sudo chmod -R 755 /var/www/${APP_NAME}
     sudo chmod -R 775 /var/www/${APP_NAME}/storage
     sudo chmod -R 775 /var/www/${APP_NAME}/bootstrap/cache
+    
+    # Ensure artisan is executable
+    sudo chmod +x /var/www/${APP_NAME}/artisan
+    
+    # Create storage directories if they don't exist
+    sudo mkdir -p /var/www/${APP_NAME}/storage/{app/public,framework/{cache,sessions,views},logs}
+    sudo chown -R www-data:www-data /var/www/${APP_NAME}/storage
+    sudo chmod -R 775 /var/www/${APP_NAME}/storage
+    
+    # Create storage symlink
+    log "Creating storage symlink..."
+    if [[ -L "/var/www/${APP_NAME}/public/storage" ]]; then
+        sudo rm /var/www/${APP_NAME}/public/storage
+    fi
+    sudo ln -sf /var/www/${APP_NAME}/storage/app/public /var/www/${APP_NAME}/public/storage
 }
 
 # Setup database
 setup_database() {
     log "Setting up database..."
     
+    # Clear any existing cache
+    php artisan config:clear
+    php artisan cache:clear
+    php artisan view:clear
+    php artisan route:clear
+    
+    # Run migrations and seeders
     php artisan migrate --force
     php artisan db:seed --force
+    
+    # Create storage link if not exists
+    php artisan storage:link
+    
+    # Optimize application for production
+    log "Optimizing application for production..."
+    php artisan config:cache
+    php artisan route:cache
+    php artisan view:cache
+    
+    log "Database setup completed successfully"
 }
 
 # Configure Nginx

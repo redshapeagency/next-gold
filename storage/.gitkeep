@@ -1,0 +1,9 @@
+# Laravel Storage Directory
+
+This directory contains all Laravel's storage files including:
+
+- app/ - Application files and uploads
+- framework/ - Framework cache, sessions, and compiled views  
+- logs/ - Application log files
+
+Do not delete this directory or its subdirectories as they are required by Laravel.

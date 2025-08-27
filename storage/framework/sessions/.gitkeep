@@ -1,0 +1,3 @@
+# Session Storage
+
+This directory stores session files when using file-based session driver.
