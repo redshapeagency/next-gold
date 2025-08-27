@@ -281,7 +281,7 @@ configure_environment() {
     sed -i "s/APP_ENV=.*/APP_ENV=${APP_ENV}/" .env
     sed -i "s/APP_KEY=.*/APP_KEY=${APP_KEY}/" .env
     sed -i "s/APP_DEBUG=.*/APP_DEBUG=false/" .env
-    sed -i "s|APP_URL=.*|APP_URL=https://${APP_DOMAIN}|" .env
+    sed -i "s#APP_URL=.*#APP_URL=https://${APP_DOMAIN}#" .env
     sed -i "s/DB_DATABASE=.*/DB_DATABASE=${DB_NAME}/" .env
     sed -i "s/DB_USERNAME=.*/DB_USERNAME=${DB_USER}/" .env
     sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=${DB_PASSWORD}/" .env
