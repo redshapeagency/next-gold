@@ -1,4 +1,0 @@
-# Laravel Public Storage
-
-This directory is used for publicly accessible files uploaded through the application.
-Files in this directory can be accessed directly via web browser through a symbolic link.
