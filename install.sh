@@ -2,6 +2,7 @@
 
 # Next Gold - Automated Installation Script for Ubuntu 24.04
 # This script sets up the complete Next Gold application environment
+# Version: 2.0 - Complete rewrite for reliability and fixing Redis/Permission issues
 
 set -e
 
@@ -160,7 +161,7 @@ ALTER USER ${DB_USER} CREATEDB;
 EOF
 }
 
-# Install Redis 7
+# Install Redis 7 with proper configuration
 install_redis() {
     log "Installing Redis 7..."
     
@@ -169,33 +170,43 @@ install_redis() {
     sudo apt update
     sudo apt install -y redis
     
-    # Configure Redis
+    # Stop Redis before configuration
+    sudo systemctl stop redis-server
+    
+    # Configure Redis properly
     log "Configuring Redis..."
     
     # Backup original config
     sudo cp /etc/redis/redis.conf /etc/redis/redis.conf.backup
     
-    # Set Redis password
-    sudo sed -i "s/# requirepass foobared/requirepass ${REDIS_PASSWORD}/" /etc/redis/redis.conf
+    # Reset Redis configuration to defaults first
+    sudo cp /etc/redis/redis.conf.backup /etc/redis/redis.conf
     
-    # Configure Redis for Laravel
-    sudo sed -i 's/bind 127.0.0.1 ::1/bind 127.0.0.1/' /etc/redis/redis.conf
-    sudo sed -i 's/# maxmemory <bytes>/maxmemory 256mb/' /etc/redis/redis.conf
-    sudo sed -i 's/# maxmemory-policy noeviction/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
+    # Configure Redis for Laravel with proper settings
+    sudo sed -i 's/^bind 127.0.0.1 ::1$/bind 127.0.0.1/' /etc/redis/redis.conf
+    sudo sed -i 's/^# requirepass foobared$/requirepass '${REDIS_PASSWORD}'/' /etc/redis/redis.conf
+    sudo sed -i 's/^protected-mode yes$/protected-mode no/' /etc/redis/redis.conf
+    sudo sed -i 's/^# maxmemory <bytes>$/maxmemory 256mb/' /etc/redis/redis.conf
+    sudo sed -i 's/^# maxmemory-policy noeviction$/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
+    sudo sed -i 's/^tcp-keepalive 300$/tcp-keepalive 60/' /etc/redis/redis.conf
+    sudo sed -i 's/^timeout 0$/timeout 300/' /etc/redis/redis.conf
     
     # Enable and restart Redis
     sudo systemctl enable redis-server
-    sudo systemctl restart redis-server
+    sudo systemctl start redis-server
     
-    # Wait for Redis to start
-    sleep 3
+    # Wait for Redis to start properly
+    sleep 5
     
-    # Test Redis connection
-    if redis-cli -a "${REDIS_PASSWORD}" ping > /dev/null 2>&1; then
+    # Test Redis connection with proper authentication
+    log "Testing Redis connection..."
+    if redis-cli -h 127.0.0.1 -p 6379 -a "${REDIS_PASSWORD}" ping | grep -q "PONG"; then
         log "Redis connection successful"
     else
-        warning "Redis connection test failed, checking status..."
+        error "Redis connection test failed"
         sudo systemctl status redis-server
+        redis-cli -h 127.0.0.1 -p 6379 -a "${REDIS_PASSWORD}" ping
+        exit 1
     fi
 }
 
@@ -287,13 +298,19 @@ configure_environment() {
         exit 1
     fi
     
-    # Generate app key
-    APP_KEY=$(php artisan key:generate --show 2>/dev/null || echo "base64:$(openssl rand -base64 32)")
+    # Generate app key with better error handling
+    log "Generating application key..."
+    if php artisan key:generate --force >/dev/null 2>&1; then
+        log "Application key generated successfully"
+    else
+        warning "Failed to generate app key with artisan, using openssl fallback"
+        APP_KEY="base64:$(openssl rand -base64 32)"
+        sed -i "s/APP_KEY=.*/APP_KEY=${APP_KEY}/" .env
+    fi
     
     # Update .env file with production values
     sed -i "s/APP_NAME=.*/APP_NAME=\"Next Gold\"/" .env
     sed -i "s/APP_ENV=.*/APP_ENV=${APP_ENV}/" .env
-    sed -i "s/APP_KEY=.*/APP_KEY=${APP_KEY}/" .env
     sed -i "s/APP_DEBUG=.*/APP_DEBUG=false/" .env
     sed -i "s#APP_URL=.*#APP_URL=https://${APP_DOMAIN}#" .env
     sed -i "s/DB_DATABASE=.*/DB_DATABASE=${DB_NAME}/" .env
@@ -306,6 +323,7 @@ configure_environment() {
     sudo mkdir -p /var/www/${APP_NAME}/storage/{app/public,framework/{cache,sessions,views},logs}
     
     # Set correct permissions for all Laravel directories
+    log "Setting correct permissions..."
     sudo chown -R www-data:www-data /var/www/${APP_NAME}
     sudo chmod -R 755 /var/www/${APP_NAME}
     sudo chmod -R 775 /var/www/${APP_NAME}/storage
@@ -313,8 +331,6 @@ configure_environment() {
     
     # Ensure artisan is executable
     sudo chmod +x /var/www/${APP_NAME}/artisan
-    sudo chown -R www-data:www-data /var/www/${APP_NAME}/storage
-    sudo chmod -R 775 /var/www/${APP_NAME}/storage
     
     # Create storage symlink
     log "Creating storage symlink..."
@@ -322,6 +338,14 @@ configure_environment() {
         sudo rm /var/www/${APP_NAME}/public/storage
     fi
     sudo ln -sf /var/www/${APP_NAME}/storage/app/public /var/www/${APP_NAME}/public/storage
+    
+    # Verify permissions are set correctly
+    if [[ -w "/var/www/${APP_NAME}/storage/logs" && -w "/var/www/${APP_NAME}/bootstrap/cache" ]]; then
+        log "Permissions set correctly"
+    else
+        error "Failed to set correct permissions"
+        exit 1
+    fi
 }
 
 # Setup database
@@ -329,14 +353,28 @@ setup_database() {
     log "Setting up database..."
     
     # Clear any existing cache
+    log "Clearing existing cache..."
     php artisan config:clear
     php artisan cache:clear
     php artisan view:clear
     php artisan route:clear
     
-    # Run migrations and seeders
-    php artisan migrate --force
-    php artisan db:seed --force
+    # Run migrations and seeders with error handling
+    log "Running database migrations..."
+    if php artisan migrate --force; then
+        log "Migrations completed successfully"
+    else
+        error "Database migration failed"
+        exit 1
+    fi
+    
+    log "Running database seeders..."
+    if php artisan db:seed --force; then
+        log "Seeders completed successfully"
+    else
+        error "Database seeding failed"
+        exit 1
+    fi
     
     # Create storage link if not exists
     php artisan storage:link
@@ -504,24 +542,43 @@ final_setup() {
     
     cd /var/www/${APP_NAME}
     
-    # Cache configurations
+    # Ensure all caches are cleared and rebuilt
+    log "Rebuilding caches..."
+    php artisan config:clear
+    php artisan cache:clear
+    php artisan view:clear
+    php artisan route:clear
+    
+    # Rebuild caches
     php artisan config:cache
     php artisan route:cache
     php artisan view:cache
     
-    # Generate application key if not set
+    # Verify application key is set
     if ! grep -q "APP_KEY=" .env || [[ $(grep "APP_KEY=" .env | cut -d'=' -f2) == "" ]]; then
+        log "Generating application key..."
         php artisan key:generate --force
     fi
     
-    # Create storage symlink
-    php artisan storage:link
+    # Ensure storage symlink exists
+    if [[ ! -L "/var/www/${APP_NAME}/public/storage" ]]; then
+        php artisan storage:link
+    fi
     
-    # Set final permissions
+    # Final permission check and set
+    log "Final permission check..."
     sudo chown -R www-data:www-data /var/www/${APP_NAME}
     sudo chmod -R 755 /var/www/${APP_NAME}
     sudo chmod -R 775 /var/www/${APP_NAME}/storage
     sudo chmod -R 775 /var/www/${APP_NAME}/bootstrap/cache
+    
+    # Test that Laravel can run basic commands
+    if php artisan --version >/dev/null 2>&1; then
+        log "Laravel installation verified"
+    else
+        error "Laravel installation verification failed"
+        exit 1
+    fi
 }
 
 # Health check
@@ -535,14 +592,48 @@ health_check() {
             info "✓ $service is running"
         else
             error "✗ $service is not running"
+            sudo systemctl status $service
         fi
     done
     
-    # Check application
-    if curl -f -s -o /dev/null "http://localhost"; then
-        info "✓ Application is responding"
+    # Check Redis connection
+    log "Testing Redis connection..."
+    if redis-cli -h 127.0.0.1 -p 6379 -a "${REDIS_PASSWORD}" ping | grep -q "PONG"; then
+        info "✓ Redis connection working"
     else
-        warning "✗ Application may not be responding correctly"
+        error "✗ Redis connection failed"
+    fi
+    
+    # Check PostgreSQL connection
+    log "Testing PostgreSQL connection..."
+    if sudo -u postgres psql -d ${DB_NAME} -c "SELECT 1;" >/dev/null 2>&1; then
+        info "✓ PostgreSQL connection working"
+    else
+        error "✗ PostgreSQL connection failed"
+    fi
+    
+    # Check application response
+    log "Testing application response..."
+    if curl -f -s -o /dev/null --max-time 10 "http://localhost"; then
+        info "✓ Application is responding on HTTP"
+    else
+        warning "✗ Application may not be responding correctly on HTTP"
+    fi
+    
+    # Check Laravel artisan commands
+    log "Testing Laravel artisan..."
+    if cd /var/www/${APP_NAME} && php artisan --version >/dev/null 2>&1; then
+        info "✓ Laravel artisan working"
+    else
+        error "✗ Laravel artisan not working"
+    fi
+    
+    # Check file permissions
+    log "Checking file permissions..."
+    if [[ -w "/var/www/${APP_NAME}/storage/logs" && -w "/var/www/${APP_NAME}/bootstrap/cache" ]]; then
+        info "✓ File permissions correct"
+    else
+        error "✗ File permissions incorrect"
     fi
 }
 
