@@ -110,111 +110,229 @@ apt install -y \
     certbot \
     python3-certbot-nginx
 
-# Install Node.js 20 if not available
-if ! command_exists node || [[ $(node -v) != v20* ]]; then
-    print_status "Installing Node.js 20..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    apt-get install -y nodejs
+# Verify PHP installation
+print_status "Verifying PHP installation..."
+if command_exists php; then
+    INSTALLED_PHP_VERSION=$(php -r "echo PHP_VERSION;")
+    print_status "PHP $INSTALLED_PHP_VERSION installed successfully"
+
+    # Check if PHP version is compatible with Laravel 11 (requires PHP 8.2+)
+    PHP_MAJOR=$(php -r "echo PHP_MAJOR_VERSION;")
+    PHP_MINOR=$(php -r "echo PHP_MINOR_VERSION;")
+
+    if [ "$PHP_MAJOR" -lt 8 ] || ([ "$PHP_MAJOR" -eq 8 ] && [ "$PHP_MINOR" -lt 2 ]); then
+        print_error "PHP $INSTALLED_PHP_VERSION is not compatible with Laravel 11 (requires PHP 8.2+)"
+        exit 1
+    fi
+else
+    print_error "PHP installation failed"
+    exit 1
 fi
 
 # Configure PostgreSQL
 print_status "Configuring PostgreSQL..."
-sudo -u postgres createuser --createdb --login --pwprompt "$DB_USER" <<< "$DB_PASS" || true
-sudo -u postgres createdb --owner="$DB_USER" "$DB_NAME" || true
+if sudo -u postgres createuser --createdb --login --pwprompt "$DB_USER" <<< "$DB_PASS" 2>/dev/null; then
+    print_status "PostgreSQL user created successfully"
+else
+    print_warning "PostgreSQL user may already exist, continuing..."
+fi
+
+if sudo -u postgres createdb --owner="$DB_USER" "$DB_NAME" 2>/dev/null; then
+    print_status "PostgreSQL database created successfully"
+else
+    print_warning "PostgreSQL database may already exist, continuing..."
+fi
 
 # Configure Redis
 print_status "Configuring Redis..."
-sed -i 's/# requirepass foobared/requirepass '"$REDIS_PASS"'/' /etc/redis/redis.conf
-systemctl restart redis-server
+if [ -f /etc/redis/redis.conf ]; then
+    sed -i 's/# requirepass foobared/requirepass '"$REDIS_PASS"'/' /etc/redis/redis.conf
+    if systemctl restart redis-server 2>/dev/null; then
+        print_status "Redis configured and restarted"
+    else
+        print_warning "Redis restart failed"
+    fi
+else
+    print_warning "Redis configuration file not found, skipping Redis setup"
+fi
 
 # Create application directory
 print_status "Creating application directory..."
-mkdir -p "$APP_DIR"
-chown -R www-data:www-data "$APP_DIR"
+if mkdir -p "$APP_DIR" 2>/dev/null; then
+    chown -R www-data:www-data "$APP_DIR" 2>/dev/null
+    print_status "Application directory created successfully"
+else
+    print_error "Failed to create application directory"
+    exit 1
+fi
 
 # Clone or update application
 if [ -d "$APP_DIR/.git" ]; then
     print_status "Updating application..."
     cd "$APP_DIR"
-    git pull origin main
+    if git pull origin main 2>/dev/null; then
+        print_status "Application updated successfully"
+    else
+        print_warning "Failed to update application, continuing with existing version"
+    fi
 else
     print_status "Cloning application..."
-    git clone https://github.com/redshapeagency/next-gold.git "$APP_DIR"
-    cd "$APP_DIR"
-    chown -R www-data:www-data .
+    if git clone https://github.com/redshapeagency/next-gold.git "$APP_DIR" 2>/dev/null; then
+        cd "$APP_DIR"
+        chown -R www-data:www-data .
+        print_status "Application cloned successfully"
+    else
+        print_error "Failed to clone application repository"
+        exit 1
+    fi
 fi
 
 # Install PHP dependencies
 print_status "Installing PHP dependencies..."
 cd "$APP_DIR"
-composer install --no-dev --optimize-autoloader
+if [ -f "composer.json" ]; then
+    if composer install --no-dev --optimize-autoloader 2>/dev/null; then
+        print_status "PHP dependencies installed successfully"
+    else
+        print_error "Failed to install PHP dependencies"
+        exit 1
+    fi
+else
+    print_error "composer.json not found"
+    exit 1
+fi
 
 # Install Node.js dependencies
 print_status "Installing Node.js dependencies..."
-npm install
-npm run build
+if [ -f "package.json" ]; then
+    if npm install 2>/dev/null; then
+        print_status "Node.js dependencies installed successfully"
+    else
+        print_error "Failed to install Node.js dependencies"
+        exit 1
+    fi
+
+    if npm run build 2>/dev/null; then
+        print_status "Assets built successfully"
+    else
+        print_error "Failed to build assets"
+        exit 1
+    fi
+else
+    print_error "package.json not found"
+    exit 1
+fi
 
 # Configure environment
 print_status "Configuring environment..."
-cp .env.example .env
-sed -i "s/APP_NAME=.*/APP_NAME=\"$APP_NAME\"/" .env
-sed -i "s/APP_KEY=.*/APP_KEY=base64:$APP_KEY/" .env
-sed -i "s/DB_DATABASE=.*/DB_DATABASE=$DB_NAME/" .env
-sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
-sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
-sed -i "s/REDIS_PASSWORD=.*/REDIS_PASSWORD=$REDIS_PASS/" .env
-sed -i "s/APP_URL=.*/APP_URL=https:\/\/$DOMAIN/" .env
+if [ -f ".env.example" ]; then
+    cp .env.example .env
+    sed -i "s/APP_NAME=.*/APP_NAME=\"$APP_NAME\"/" .env
+    sed -i "s/APP_KEY=.*/APP_KEY=base64:$APP_KEY/" .env
+    sed -i "s/DB_DATABASE=.*/DB_DATABASE=$DB_NAME/" .env
+    sed -i "s/DB_USERNAME=.*/DB_USERNAME=$DB_USER/" .env
+    sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=$DB_PASS/" .env
+    sed -i "s/REDIS_PASSWORD=.*/REDIS_PASSWORD=$REDIS_PASS/" .env
+    sed -i "s/APP_URL=.*/APP_URL=https:\/\/$DOMAIN/" .env
+    print_status "Environment configured successfully"
+else
+    print_error ".env.example not found"
+    exit 1
+fi
 
 # Generate application key
 print_status "Generating application key..."
-php artisan key:generate
+if php artisan key:generate 2>/dev/null; then
+    print_status "Application key generated successfully"
+else
+    print_error "Failed to generate application key"
+    exit 1
+fi
 
 # Run migrations and seeders
 print_status "Running database migrations..."
-php artisan migrate --force
-php artisan db:seed --force
+cd "$APP_DIR"
+if php artisan migrate --force 2>/dev/null; then
+    print_status "Database migrations completed successfully"
+else
+    print_error "Database migrations failed"
+    exit 1
+fi
+
+if php artisan db:seed --force 2>/dev/null; then
+    print_status "Database seeded successfully"
+else
+    print_warning "Database seeding failed, but continuing..."
+fi
 
 # Set up storage permissions
 print_status "Setting up storage permissions..."
-chmod -R 775 storage bootstrap/cache
-chown -R www-data:www-data storage bootstrap/cache
+chmod -R 775 storage bootstrap/cache 2>/dev/null || print_warning "Some storage permissions may not be set correctly"
+chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || print_warning "Some storage ownership may not be set correctly"
 
 # Configure Nginx
 print_status "Configuring Nginx..."
-cp scripts/nginx/next-gold.conf.tpl /etc/nginx/sites-available/$APP_NAME
-sed -i "s/{{DOMAIN}}/$DOMAIN/g" /etc/nginx/sites-available/$APP_NAME
-sed -i "s/{{APP_DIR}}/$APP_DIR/g" /etc/nginx/sites-available/$APP_NAME
-ln -sf /etc/nginx/sites-available/$APP_NAME /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
-nginx -t
-systemctl reload nginx
+if [ -f "scripts/nginx/next-gold.conf.tpl" ]; then
+    cp scripts/nginx/next-gold.conf.tpl /etc/nginx/sites-available/$APP_NAME
+    sed -i "s/{{DOMAIN}}/$DOMAIN/g" /etc/nginx/sites-available/$APP_NAME
+    sed -i "s/{{APP_DIR}}/$APP_DIR/g" /etc/nginx/sites-available/$APP_NAME
+    ln -sf /etc/nginx/sites-available/$APP_NAME /etc/nginx/sites-enabled/
+    rm -f /etc/nginx/sites-enabled/default
+
+    if nginx -t 2>/dev/null; then
+        systemctl reload nginx
+        print_status "Nginx configured and reloaded"
+    else
+        print_error "Nginx configuration test failed"
+        exit 1
+    fi
+else
+    print_warning "Nginx configuration template not found, skipping Nginx setup"
+fi
 
 # Configure systemd service for queues
 print_status "Configuring queue service..."
-cp scripts/systemd/next-gold-queue.service /etc/systemd/system/
-sed -i "s/{{APP_DIR}}/$APP_DIR/g" /etc/systemd/system/next-gold-queue.service
-sed -i "s/{{USER}}/$(whoami)/g" /etc/systemd/system/next-gold-queue.service
-systemctl daemon-reload
-systemctl enable next-gold-queue
-systemctl start next-gold-queue
+if [ -f "scripts/systemd/next-gold-queue.service" ]; then
+    cp scripts/systemd/next-gold-queue.service /etc/systemd/system/
+    sed -i "s/{{APP_DIR}}/$APP_DIR/g" /etc/systemd/system/next-gold-queue.service
+    sed -i "s/{{USER}}/$(whoami)/g" /etc/systemd/system/next-gold-queue.service
+    systemctl daemon-reload
+    systemctl enable next-gold-queue
+    systemctl start next-gold-queue
+    print_status "Queue service configured and started"
+else
+    print_warning "Queue service file not found, skipping queue setup"
+fi
 
 # Configure cron for scheduled tasks
 print_status "Configuring cron jobs..."
 CRON_JOB="* * * * * cd $APP_DIR && php artisan schedule:run >> /dev/null 2>&1"
-(crontab -l ; echo "$CRON_JOB") | crontab -
+if (crontab -l 2>/dev/null; echo "$CRON_JOB") | crontab - 2>/dev/null; then
+    print_status "Cron job configured successfully"
+else
+    print_warning "Failed to configure cron job"
+fi
 
 # Set up SSL certificate
 print_status "Setting up SSL certificate..."
-certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --email "admin@$DOMAIN" || true
+if certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos --email "admin@$DOMAIN" 2>/dev/null; then
+    print_status "SSL certificate configured successfully"
+else
+    print_warning "SSL certificate setup failed (this is normal if DNS is not configured)"
+fi
 
 # Create backup directory
 print_status "Creating backup directory..."
-mkdir -p /var/backups/$APP_NAME
-chown www-data:www-data /var/backups/$APP_NAME
+if mkdir -p /var/backups/$APP_NAME 2>/dev/null; then
+    chown www-data:www-data /var/backups/$APP_NAME 2>/dev/null
+    print_status "Backup directory created successfully"
+else
+    print_warning "Failed to create backup directory"
+fi
 
 # Set up log rotation
 print_status "Setting up log rotation..."
-cat > /etc/logrotate.d/$APP_NAME << EOF
+if cat > /etc/logrotate.d/$APP_NAME << EOF 2>/dev/null; then
 $APP_DIR/storage/logs/*.log {
     daily
     missingok
@@ -227,17 +345,49 @@ $APP_DIR/storage/logs/*.log {
     endscript
 }
 EOF
+    print_status "Log rotation configured successfully"
+else
+    print_warning "Failed to configure log rotation"
+fi
 
 # Final setup steps
 print_status "Running final setup..."
-php artisan config:cache
-php artisan route:cache
-php artisan view:cache
+php artisan config:cache 2>/dev/null || print_warning "Config cache failed"
+php artisan route:cache 2>/dev/null || print_warning "Route cache failed"
+php artisan view:cache 2>/dev/null || print_warning "View cache failed"
+
+# Verify services status
+print_status "Verifying services status..."
+SERVICES_STATUS=""
+
+if systemctl is-active --quiet nginx 2>/dev/null; then
+    SERVICES_STATUS="$SERVICES_STATUS✓ Nginx: Running\n"
+else
+    SERVICES_STATUS="$SERVICES_STATUS✗ Nginx: Not running\n"
+fi
+
+if systemctl is-active --quiet postgresql 2>/dev/null; then
+    SERVICES_STATUS="$SERVICES_STATUS✓ PostgreSQL: Running\n"
+else
+    SERVICES_STATUS="$SERVICES_STATUS✗ PostgreSQL: Not running\n"
+fi
+
+if systemctl is-active --quiet redis-server 2>/dev/null; then
+    SERVICES_STATUS="$SERVICES_STATUS✓ Redis: Running\n"
+else
+    SERVICES_STATUS="$SERVICES_STATUS✗ Redis: Not running\n"
+fi
+
+if systemctl is-active --quiet next-gold-queue 2>/dev/null; then
+    SERVICES_STATUS="$SERVICES_STATUS✓ Queue Service: Running\n"
+else
+    SERVICES_STATUS="$SERVICES_STATUS✗ Queue Service: Not running\n"
+fi
 
 # Create admin user if setup is not completed
-if ! php artisan tinker --execute="echo \App\Models\User::count();" | grep -q "1"; then
+if php artisan tinker --execute="echo \App\Models\User::count();" 2>/dev/null | grep -q "0"; then
     print_status "Creating default admin user..."
-    php artisan tinker --execute="
+    if php artisan tinker --execute="
     \App\Models\User::create([
         'username' => 'admin',
         'email' => 'admin@$DOMAIN',
@@ -246,15 +396,32 @@ if ! php artisan tinker --execute="echo \App\Models\User::count();" | grep -q "1
         'last_name' => 'System',
         'is_active' => true
     ]);
-    "
+    " 2>/dev/null; then
+        print_status "Default admin user created successfully"
+    else
+        print_warning "Failed to create default admin user"
+    fi
+else
+    print_status "Admin user already exists, skipping creation"
 fi
 
 print_status "Installation completed successfully!"
 echo
+echo "Installation Summary:"
+echo "===================="
+echo "✓ PHP Version: $PHP_VERSION"
+echo "✓ Domain: $DOMAIN"
+echo "✓ Application Directory: $APP_DIR"
+echo "✓ Database: $DB_NAME"
+echo "✓ Backup Directory: /var/backups/$APP_NAME"
+echo
+echo "Services Status:"
+echo "$SERVICES_STATUS"
+echo
 echo "Next steps:"
 echo "1. Access the application at: https://$DOMAIN"
 echo "2. Complete the setup wizard if this is the first installation"
-echo "3. Change the default admin password"
+echo "3. Change the default admin password (username: admin, password: password)"
 echo "4. Configure gold price API settings"
 echo "5. Set up monitoring and alerts"
 echo
@@ -265,4 +432,11 @@ echo "  Password: $DB_PASS"
 echo
 echo "Redis password: $REDIS_PASS"
 echo
+echo "Useful commands:"
+echo "  Check system status: $APP_DIR/scripts/checks.sh"
+echo "  Create backup: $APP_DIR/scripts/backup.sh"
+echo "  Update application: $APP_DIR/scripts/update.sh"
+echo "  Monitor system: $APP_DIR/scripts/monitor.sh"
+echo
 print_warning "Please save these credentials securely!"
+print_warning "Remember to change the default admin password!"
