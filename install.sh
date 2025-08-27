@@ -75,7 +75,8 @@ get_configuration() {
             echo
         done
     else
-        REDIS_PASSWORD=$(openssl rand -base64 32)
+        # Generate a safe Redis password (alphanumeric only)
+        REDIS_PASSWORD=$(openssl rand -hex 16)
     fi
     
     read -p "Setup SSL with Let's Encrypt? (Y/n): " ssl_response
@@ -169,20 +170,33 @@ install_redis() {
     sudo apt install -y redis
     
     # Configure Redis
-    echo "[$TIMESTAMP] Configuring Redis..."
-    # Use a temporary file to safely handle special characters in password
-    echo "requirepass $REDIS_PASSWORD" | sudo tee -a /etc/redis/redis.conf.tmp > /dev/null
-    sudo sed '/# requirepass foobared/r /etc/redis/redis.conf.tmp' /etc/redis/redis.conf | sudo tee /etc/redis/redis.conf.new > /dev/null
-    sudo sed -i '/# requirepass foobared/d' /etc/redis/redis.conf.new
-    sudo mv /etc/redis/redis.conf.new /etc/redis/redis.conf
-    sudo rm -f /etc/redis/redis.conf.tmp
+    log "Configuring Redis..."
     
+    # Backup original config
+    sudo cp /etc/redis/redis.conf /etc/redis/redis.conf.backup
+    
+    # Set Redis password
+    sudo sed -i "s/# requirepass foobared/requirepass ${REDIS_PASSWORD}/" /etc/redis/redis.conf
+    
+    # Configure Redis for Laravel
     sudo sed -i 's/bind 127.0.0.1 ::1/bind 127.0.0.1/' /etc/redis/redis.conf
     sudo sed -i 's/# maxmemory <bytes>/maxmemory 256mb/' /etc/redis/redis.conf
     sudo sed -i 's/# maxmemory-policy noeviction/maxmemory-policy allkeys-lru/' /etc/redis/redis.conf
     
+    # Enable and restart Redis
     sudo systemctl enable redis-server
     sudo systemctl restart redis-server
+    
+    # Wait for Redis to start
+    sleep 3
+    
+    # Test Redis connection
+    if redis-cli -a "${REDIS_PASSWORD}" ping > /dev/null 2>&1; then
+        log "Redis connection successful"
+    else
+        warning "Redis connection test failed, checking status..."
+        sudo systemctl status redis-server
+    fi
 }
 
 # Install Nginx
@@ -287,8 +301,11 @@ configure_environment() {
     sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=${DB_PASSWORD}/" .env
     sed -i "s/REDIS_PASSWORD=.*/REDIS_PASSWORD=${REDIS_PASSWORD}/" .env
     sed -i "s/LOG_LEVEL=.*/LOG_LEVEL=error/" .env
-
-    # Set permissions
+    
+    # Create storage directories if they don't exist
+    sudo mkdir -p /var/www/${APP_NAME}/storage/{app/public,framework/{cache,sessions,views},logs}
+    
+    # Set correct permissions for all Laravel directories
     sudo chown -R www-data:www-data /var/www/${APP_NAME}
     sudo chmod -R 755 /var/www/${APP_NAME}
     sudo chmod -R 775 /var/www/${APP_NAME}/storage
@@ -296,9 +313,6 @@ configure_environment() {
     
     # Ensure artisan is executable
     sudo chmod +x /var/www/${APP_NAME}/artisan
-    
-    # Create storage directories if they don't exist
-    sudo mkdir -p /var/www/${APP_NAME}/storage/{app/public,framework/{cache,sessions,views},logs}
     sudo chown -R www-data:www-data /var/www/${APP_NAME}/storage
     sudo chmod -R 775 /var/www/${APP_NAME}/storage
     
