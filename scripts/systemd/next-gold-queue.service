@@ -1,0 +1,23 @@
+[Unit]
+Description=Next Gold Queue Worker
+After=network.target
+Requires=postgresql.service
+Requires=redis-server.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/next-gold
+ExecStart=/usr/bin/php artisan queue:work --verbose --tries=3 --timeout=90
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Environment variables
+Environment=APP_ENV=production
+Environment=QUEUE_CONNECTION=database
+
+[Install]
+WantedBy=multi-user.target
