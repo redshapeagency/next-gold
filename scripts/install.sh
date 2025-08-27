@@ -306,6 +306,20 @@ fi
 print_status "Installing PHP dependencies..."
 cd "$APP_DIR"
 
+# Create bootstrap/cache directory if it doesn't exist
+if [ ! -d "bootstrap/cache" ]; then
+    print_status "Creating bootstrap/cache directory..."
+    mkdir -p bootstrap/cache
+    chmod 775 bootstrap/cache
+    chown www-data:www-data bootstrap/cache 2>/dev/null || true
+fi
+
+# Set proper permissions for storage and bootstrap/cache before Composer
+print_status "Setting up Laravel directories..."
+mkdir -p storage/framework/cache storage/framework/sessions storage/framework/views storage/logs
+chmod -R 775 storage bootstrap/cache 2>/dev/null || print_warning "Some storage permissions may not be set correctly"
+chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || print_warning "Some storage ownership may not be set correctly"
+
 if [ "$SKIP_DEPS" = "true" ]; then
     print_warning "Skipping PHP dependency installation (SKIP_DEPS=true)"
     print_warning "Remember to run 'composer install --no-dev --optimize-autoloader' manually"
@@ -325,6 +339,7 @@ else
         # Set Composer to non-interactive mode and increase timeout
         export COMPOSER_NO_INTERACTION=1
         export COMPOSER_PROCESS_TIMEOUT=300
+        export COMPOSER_ALLOW_SUPERUSER=1
 
         # Try to install dependencies with verbose output for debugging
         if timeout 900 composer install --no-dev --optimize-autoloader --no-progress --prefer-dist 2>&1; then
@@ -338,7 +353,7 @@ else
             echo ""
             print_warning "You can try to install dependencies manually:"
             echo "  cd $APP_DIR"
-            echo "  composer install --no-dev --optimize-autoloader"
+            echo "  COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader"
             echo ""
             print_warning "Or run the script again with SKIP_DEPS=true:"
             echo "  SKIP_DEPS=true bash install.sh"
@@ -441,11 +456,6 @@ if php artisan db:seed --force 2>/dev/null; then
 else
     print_warning "Database seeding failed, but continuing..."
 fi
-
-# Set up storage permissions
-print_status "Setting up storage permissions..."
-chmod -R 775 storage bootstrap/cache 2>/dev/null || print_warning "Some storage permissions may not be set correctly"
-chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || print_warning "Some storage ownership may not be set correctly"
 
 # Configure Nginx
 print_status "Configuring Nginx..."
